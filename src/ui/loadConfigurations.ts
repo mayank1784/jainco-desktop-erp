@@ -7,20 +7,18 @@ import configService from './services/configService';
 // Configuration loader function
 async function loadConfigurations() {
   try {
-    // Ensure electronAPI exists
-    //@ts-expect-error ddd
     if (!window.electronAPI) {
       console.error('Electronic API not available');
       return null;
     }
 
     // Get Firebase configuration
-    //@ts-expect-error ddd
+
     const firebaseConfig = await window.electronAPI.getFirebaseConfig();
     const firebaseApp = initializeApp(firebaseConfig);
     
     // Get Supabase configuration
-    //@ts-expect-error ddd
+    
     const supabaseConfig = await window.electronAPI.getSupabaseConfig();
     const supabaseClient = createClient(supabaseConfig.url, supabaseConfig.key);
 

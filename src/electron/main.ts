@@ -1,11 +1,12 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { fileURLToPath } from "url";
 import * as path from "path";
-import { isDev } from "./util.js";
+import { isDev, wrapIpcHandler } from "./util.js";
 import { initializeDotenv } from "./util.js";
 import ConfigManager from "./configManager.js";
 import { dbManager } from "./db/manager.js";
 import { Database as SQLiteDatabase } from "better-sqlite3";
+
 initializeDotenv();
 
 // Ensure required environment variables are present
@@ -68,6 +69,21 @@ const createMainWindow = () => {
   ipcMain.handle("get-supabase-config", () => {
     return ConfigManager.getSupabaseConfig();
   });
+
+  // Example IPC handlers
+  wrapIpcHandler<[string]>(
+    "fetch-customers",
+    async (db, _event, input: string) => {
+      const query = `
+        SELECT * FROM customers
+        WHERE name LIKE ? OR email LIKE ? OR phone LIKE ?
+      `;
+      const likeInput = `%${input}%`;
+      const results = db.prepare(query).all(likeInput, likeInput, likeInput);
+      return { success: true, data: results };
+    },
+    db
+  );
 
   // Set initial configs from environment variables if not set
   if (!firebaseConfig.apiKey) {
@@ -142,6 +158,7 @@ app.whenReady().then(async () => {
 
 // Quit the app when all windows are closed (except on macOS)
 app.on("window-all-closed", () => {
+  dbManager.close();
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -152,4 +169,7 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createMainWindow();
   }
+});
+app.on("before-quit", () => {
+  dbManager.close();
 });
