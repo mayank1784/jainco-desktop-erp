@@ -2,8 +2,8 @@ import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
 import { app } from "electron";
-import { Database as SQLiteDatabase } from "better-sqlite3";
 import { ipcMain, IpcMainInvokeEvent } from "electron";
+import { DatabaseManager } from "./db/manager.js";
 
 export function isDev(): boolean {
   return process.env.NODE_ENV === "development";
@@ -47,16 +47,16 @@ export function initializeDotenv(): boolean {
  */
 export const wrapIpcHandler = <Args extends unknown[]>(
   channel: string,
-  handler: (db: SQLiteDatabase, event: IpcMainInvokeEvent, ...args: Args) => Promise<unknown> | unknown,
-  db: SQLiteDatabase | null
+  handler: (dbManager: DatabaseManager, event: IpcMainInvokeEvent, ...args: Args) => Promise<unknown> | unknown,
+  dbManager: DatabaseManager
 ) => {
   ipcMain.handle(channel, async (event, ...args: Args) => {
     try {
-      if (!db) {
+      if (!dbManager.getDatabase()) {
         throw new Error("Database is not initialized.");
       }
       // Pass db explicitly to the handler
-      return await handler(db, event, ...args);
+      return await handler(dbManager, event, ...args);
     } catch (error: unknown) {
       console.error(`Error in IPC handler for ${channel}:`, error);
       return { success: false, error: (error as Error).message || "Unknown error" };

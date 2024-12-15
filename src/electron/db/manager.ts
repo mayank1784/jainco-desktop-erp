@@ -3,7 +3,7 @@ import { join } from "path";
 import Database, { Database as SQLiteDatabase } from "better-sqlite3";
 import Store from "electron-store";
 
-class DatabaseManager {
+export class DatabaseManager {
   private store: Store;
   private dbPath: string;
   private db: SQLiteDatabase | null;
@@ -96,9 +96,10 @@ class DatabaseManager {
       pincode TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      credit_balance DECIMAL(12,2) DEFAULT 0,
+      debit_balance DECIMAL(12,2) DEFAULT 0,
       sp_synced BOOLEAN DEFAULT 0
       )`);
-
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_cust_id ON customers(fs_cust_id)`
     );
@@ -131,13 +132,13 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id TEXT NOT NULL UNIQUE,
-        fs_customer_id INTEGER NOT NULL,
+        customer_id INTEGER NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         sp_synced BOOLEAN DEFAULT 0,
-        FOREIGN KEY (fs_customer_id) REFERENCES customers(id) ON DELETE CASCADE 
+        FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE 
       )`);
 
     this.db.exec(`
@@ -151,7 +152,7 @@ class DatabaseManager {
         invoice_id TEXT NOT NULL UNIQUE,
         cust_id INTEGER NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('unpaid', 'paid')),
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        date TEXT DEFAULT (DATE('now')),
         total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
         add_on DECIMAL(10, 2) DEFAULT 0,
         discount DECIMAL(10, 2) DEFAULT 0,
@@ -189,7 +190,97 @@ class DatabaseManager {
           WHERE id = NEW.id;
         END
       `);
+    this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS after_invoice_insert_update_debit_balance
+        AFTER INSERT ON invoices
+        BEGIN
+          UPDATE customers
+          SET debit_balance = debit_balance + NEW.net_amount
+          WHERE id = NEW.cust_id;
+        END
+      `);
+    this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS after_invoice_insert_update_credit_balance
+        AFTER INSERT ON invoices
+        WHEN NEW.status = 'paid'
+        BEGIN
+          UPDATE customers
+          SET credit_balance = credit_balance + NEW.net_amount
+          WHERE id = NEW.cust_id;
+        END
+      `);
 
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_net_amount_update
+      AFTER UPDATE OF net_amount ON invoices
+      BEGIN
+        UPDATE customers
+        SET debit_balance = debit_balance + (NEW.net_amount - OLD.net_amount)
+        WHERE id = NEW.cust_id;
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_status_to_paid
+      AFTER UPDATE OF status ON invoices
+      WHEN OLD.status = 'unpaid' AND NEW.status = 'paid'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance + NEW.net_amount
+        WHERE id = NEW.cust_id;
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_status_to_unpaid
+      AFTER UPDATE OF status ON invoices
+      WHEN OLD.status = 'paid' AND NEW.status = 'unpaid'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance - OLD.net_amount
+        WHERE id = NEW.cust_id;
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_cust_id_update
+      AFTER UPDATE OF cust_id ON invoices
+      BEGIN
+        UPDATE customers
+        SET debit_balance = debit_balance - OLD.net_amount
+        WHERE id = OLD.cust_id;
+
+        UPDATE customers
+        SET credit_balance = credit_balance - OLD.net_amount
+        WHERE id = OLD.cust_id AND OLD.status = 'paid';
+
+        UPDATE customers
+        SET debit_balance = debit_balance + NEW.net_amount
+        WHERE id = NEW.cust_id;
+
+        UPDATE customers
+        SET credit_balance = credit_balance + NEW.net_amount
+        WHERE id = NEW.cust_id AND NEW.status = 'paid';
+      END
+      `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_delete_debit_balance
+      AFTER DELETE ON invoices
+      BEGIN
+        UPDATE customers
+        SET debit_balance = debit_balance - OLD.net_amount
+        WHERE id = OLD.cust_id;
+      END
+      `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_invoice_delete_credit_balance
+      AFTER DELETE ON invoices
+      WHEN OLD.status = 'paid'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance - OLD.net_amount
+        WHERE id = OLD.cust_id;
+      END
+      `);
     // Invoice items table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS invoice_items (
@@ -241,7 +332,7 @@ class DatabaseManager {
       transaction_id TEXT NOT NULL UNIQUE,          
       invoice_id INTEGER NOT NULL,
       payment_method INTEGER,
-      transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      transaction_date TEXT DEFAULT (DATE('now')),
       amount DECIMAL(12, 2) NOT NULL,
       transaction_type TEXT CHECK (transaction_type IN ('payment', 'refund', 'adjustment')),
       status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
@@ -252,6 +343,99 @@ class DatabaseManager {
       FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
       FOREIGN KEY (payment_method) REFERENCES payment_methods(id) ON DELETE SET NULL
       )`);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_insert_payment
+      AFTER INSERT ON transactions
+      WHEN NEW.status = 'completed' AND NEW.transaction_type = 'payment'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance + NEW.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = NEW.invoice_id);
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_insert_refund
+      AFTER INSERT ON transactions
+      WHEN NEW.status = 'completed' AND NEW.transaction_type = 'refund'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance - NEW.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = NEW.invoice_id);
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_insert_adjustment
+      AFTER INSERT ON transactions
+      WHEN NEW.status = 'completed' AND NEW.transaction_type = 'adjustment'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance + NEW.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = NEW.invoice_id);
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_update_old_completed
+      AFTER UPDATE ON transactions
+      WHEN OLD.status = 'completed'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = CASE
+          WHEN OLD.transaction_type = 'payment' THEN credit_balance - OLD.amount
+          WHEN OLD.transaction_type = 'refund' THEN credit_balance + OLD.amount
+          WHEN OLD.transaction_type = 'adjustment' THEN credit_balance - OLD.amount
+          ELSE credit_balance
+        END
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = OLD.invoice_id);
+      END
+      `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_update_new_completed
+      AFTER UPDATE ON transactions
+      WHEN NEW.status = 'completed'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = CASE
+          WHEN NEW.transaction_type = 'payment' THEN credit_balance + NEW.amount
+          WHEN NEW.transaction_type = 'refund' THEN credit_balance - NEW.amount
+          WHEN NEW.transaction_type = 'adjustment' THEN credit_balance + NEW.amount
+          ELSE credit_balance
+        END
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = NEW.invoice_id);
+      END
+      `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_delete_payment
+      AFTER DELETE ON transactions
+      WHEN OLD.status = 'completed' AND OLD.transaction_type = 'payment'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance - OLD.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = OLD.invoice_id);
+      END
+      `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_delete_refund
+      AFTER DELETE ON transactions
+      WHEN OLD.status = 'completed' AND OLD.transaction_type = 'refund'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance + OLD.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = OLD.invoice_id);
+      END
+      `);
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS after_transaction_delete_adjustment
+      AFTER DELETE ON transactions
+      WHEN OLD.status = 'completed' AND OLD.transaction_type = 'adjustment'
+      BEGIN
+        UPDATE customers
+        SET credit_balance = credit_balance - OLD.amount
+        WHERE id = (SELECT cust_id FROM invoices WHERE id = OLD.invoice_id);
+      END
+      `);
 
     this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_trans_id ON transactions (transaction_id)
@@ -327,6 +511,41 @@ class DatabaseManager {
       this.db.close();
       this.db = null;
     }
+  }
+
+  async getCustomersByFilters(filters: Record<string, string | number>) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    const validFields = [
+      "id",
+      "name",
+      "email",
+      "phone",
+      "credit_balance",
+      "debit_balance",
+    ];
+    const conditions = [];
+    const values = [];
+
+    for (const [field, value] of Object.entries(filters)) {
+      if (!validFields.includes(field)) {
+        throw new Error(`Invalid field: ${field}`);
+      }
+
+      // Handle string fields with LIKE operator and wildcards
+      if (typeof value === "string") {
+        conditions.push(`${field} LIKE ?`);
+        values.push(`%${value}%`); // Add wildcards for partial matching
+      } else {
+        conditions.push(`${field} = ?`);
+        values.push(value);
+      }
+    }
+
+    const query = `SELECT * FROM customers WHERE ${conditions.join(" AND ")}`;
+    const results = this.db.prepare(query).all(values);
+    return { success: true, data: results };
   }
 }
 

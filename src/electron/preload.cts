@@ -73,6 +73,9 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     fetchCustomers: async (input) => {
       return await ipcRenderer.invoke("fetch-customers", input);
     },
+    filterCustomers: async (filters) => {
+      return await ipcRenderer.invoke("fetch-customers-by-filters", filters);
+    },
     createCustomer: async (customer) => {
       return await ipcRenderer.invoke("create-customer", customer);
     },
