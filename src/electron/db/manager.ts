@@ -85,7 +85,7 @@ export class DatabaseManager {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS customers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fs_cust_id TEXT NOT NULL, 
+      fs_cust_id TEXT, 
       name TEXT NOT NULL,
       email TEXT,
       phone TEXT,
@@ -513,7 +513,7 @@ export class DatabaseManager {
     }
   }
 
-  async getCustomersByFilters(filters: Record<string, string | number>) {
+  getCustomersByFilters(filters: Record<string, string | number>) {
     if (!this.db) {
       throw new Error("Database is not initialized.");
     }
@@ -546,6 +546,68 @@ export class DatabaseManager {
     const query = `SELECT * FROM customers WHERE ${conditions.join(" AND ")}`;
     const results = this.db.prepare(query).all(values);
     return { success: true, data: results };
+  }
+
+  getAllCustomers() {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    const query = `SELECT * FROM customers`;
+    const results = this.db.prepare(query).all();
+    return { success: true, data: results };
+  }
+
+  updateCustomer(
+    customerId: number,
+    updates: Omit<Customer, "id" | "fs_cust_id" | "created_at">
+  ) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    const keys = Object.keys(updates) as (keyof typeof updates)[];
+    if (keys.length === 0) {
+      throw new Error("No fields provided to update.");
+    }
+
+    // Construct the SET clause dynamically
+    const setClause = keys.map((key) => `${key} = ?`).join(", ");
+    const values = keys.map((key) => updates[key]);
+    const query = `
+    UPDATE customers
+    SET ${setClause}
+    WHERE id = ?
+  `;
+
+    // Execute the update query
+    const stmt = this.db.prepare(query);
+    const result = stmt.run(...values, customerId);
+
+    // Fetch the updated rows if any changes were made
+    let updatedRows: unknown[] = [];
+    if (result.changes > 0) {
+      const selectQuery = `SELECT * FROM customers WHERE id = ?`;
+      updatedRows = this.db.prepare(selectQuery).all(customerId);
+    }
+    return { success: true, changes: result.changes, data: updatedRows };
+  }
+
+  deleteCustomer(customerId: number) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    // Select the rows that will be deleted (for returning later)
+    const selectQuery = `SELECT * FROM customers WHERE id = ?`;
+    const deletedRows = this.db.prepare(selectQuery).all(customerId);
+
+    if (deletedRows.length === 0) {
+      return { success: false, changes: 0, data: [] }; // No rows to delete
+    }
+
+    // Delete the customer
+    const deleteQuery = `DELETE FROM customers WHERE id = ?`;
+    const result = this.db.prepare(deleteQuery).run(customerId);
+
+    return { success: true, changes: result.changes, data: deletedRows };
   }
 }
 

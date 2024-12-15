@@ -70,20 +70,17 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   //     callback(config)
   //   ),
   customer: {
-    fetchCustomers: async (input) => {
-      return await ipcRenderer.invoke("fetch-customers", input);
+    filterCustomers:(filters) => {
+      return ipcRenderer.invoke("fetch-customers-by-filters", filters);
     },
-    filterCustomers: async (filters) => {
-      return await ipcRenderer.invoke("fetch-customers-by-filters", filters);
+    getAllCustomers: () => {
+      return ipcRenderer.invoke("get-all-customers");
     },
-    createCustomer: async (customer) => {
-      return await ipcRenderer.invoke("create-customer", customer);
+    updateCustomer:(customerId, updates) => {
+      return ipcRenderer.invoke("update-customer", customerId, updates);
     },
-    updateCustomer: async (customer) => {
-      return await ipcRenderer.invoke("update-customer", customer);
-    },
-    deleteCustomer: async (customerId) => {
-      return await ipcRenderer.invoke("delete-customer", customerId);
+    deleteCustomer: (customerId) => {
+      return ipcRenderer.invoke("delete-customer", customerId);
     },
   }
   

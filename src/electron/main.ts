@@ -70,25 +70,26 @@ const createMainWindow = () => {
     return ConfigManager.getSupabaseConfig();
   });
 
-  // Example IPC handlers
-  // wrapIpcHandler<[string]>(
-  //   "fetch-customers",
-  //   async (db, _event, input: string) => {
-  //     const query = `
-  //       SELECT * FROM customers
-  //       WHERE name LIKE ? OR email LIKE ? OR phone LIKE ?
-  //     `;
-  //     const likeInput = `%${input}%`;
-  //     const results = db.prepare(query).all(likeInput, likeInput, likeInput);
-  //     return { success: true, data: results };
-  //   },
-  //   db
-  // );
-
   wrapIpcHandler<[Record<string, string | number>]>(
     "fetch-customers-by-filters",
     async (dbManager, _event, filters: Record<string, string | number>) => {
       return dbManager.getCustomersByFilters(filters);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[number, Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>]>(
+    "update-customer",
+    async (dbManager, _event, customerId: number, updates: Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>) => {
+      return dbManager.updateCustomer(customerId, updates);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[number]>(
+    "delete-customer",
+    async (dbManager, _event, customerId: number) => {
+      return dbManager.deleteCustomer(customerId);
     },
     dbManager
   );

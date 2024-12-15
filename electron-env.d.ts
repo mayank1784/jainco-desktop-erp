@@ -40,19 +40,12 @@ declare global {
       //   updateStock: (data: { sku: string; stock: number }) => Promise<Product>;
       // };
       customer: {
-        fetchCustomers: (
-          input: string
-        ) => Promise<{ success: boolean; data: Customer[] }>;
-        createCustomer: (
-          customer: Customer
-        ) => Promise<{ success: boolean; data: Customer }>;
         filterCustomers: (
           filters: Record<string, string | number>
         ) => Promise<{ success: boolean; data: Customer[] }>;
-        updateCustomer: (
-          customer: Customer
-        ) => Promise<{ success: boolean; data: Customer }>;
-        deleteCustomer: (customerId: number) => Promise<{ success: boolean }>;
+        getAllCustomers: () => Promise<{ success: boolean; data: Customer[] }>;
+        updateCustomer: (customerId: number, updates: Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>) => Promise<{ success: boolean; changes: number; data: Customer }>;
+        deleteCustomer: (customerId: number) => Promise<{ success: boolean; changes: number; data: Customer }>;
       };
     };
   }
