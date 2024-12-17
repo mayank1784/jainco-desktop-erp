@@ -70,17 +70,30 @@ const createMainWindow = () => {
     return ConfigManager.getSupabaseConfig();
   });
 
-  wrapIpcHandler<[Record<string, string | number>]>(
+  wrapIpcHandler<[CustomerFilters]>(
     "fetch-customers-by-filters",
-    async (dbManager, _event, filters: Record<string, string | number>) => {
+    async (dbManager, _event, filters) => {
       return dbManager.getCustomersByFilters(filters);
     },
     dbManager
   );
 
-  wrapIpcHandler<[number, Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>]>(
+  wrapIpcHandler<[Partial<Customer>]>(
+    "create-customer",
+    async (dbManager, _event, customerData) => {
+      return dbManager.createCustomer(customerData);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[number, Omit<Customer, "id" | "fs_cust_id" | "created_at">]>(
     "update-customer",
-    async (dbManager, _event, customerId: number, updates: Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>) => {
+    async (
+      dbManager,
+      _event,
+      customerId,
+      updates
+    ) => {
       return dbManager.updateCustomer(customerId, updates);
     },
     dbManager
@@ -88,12 +101,69 @@ const createMainWindow = () => {
 
   wrapIpcHandler<[number]>(
     "delete-customer",
-    async (dbManager, _event, customerId: number) => {
+    async (dbManager, _event, customerId) => {
       return dbManager.deleteCustomer(customerId);
     },
     dbManager
   );
 
+  wrapIpcHandler<[Invoice, InvoiceItem[]]>(
+    "create-invoice",
+    async (dbManager, _event, invoiceData, invoiceItems) => {
+      return dbManager.createInvoice(invoiceData, invoiceItems);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[number | string]>(
+    "get-invoice",
+    async (dbManager, _event, identifier) => {
+      const filter =
+        typeof identifier === "string"
+          ? { invoice_id: identifier }
+          : { id: identifier };
+      return dbManager.getInvoice(filter);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<
+    [
+      number | string,
+      Partial<Omit<Invoice, "id" | "invoice_id">>,
+      InvoiceItem[]
+    ]
+  >(
+    "update-invoice",
+    async (dbManager, _event, identifier, updatedInvoiceData, updatedItems) => {
+      const filter =
+        typeof identifier === "string"
+          ? { invoice_id: identifier }
+          : { id: identifier };
+      return dbManager.updateInvoice(filter, updatedInvoiceData, updatedItems);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[number | string]>(
+    "delete-invoice",
+    async (dbManager, _event, identifier) => {
+      const filter =
+        typeof identifier === "string"
+          ? { invoice_id: identifier }
+          : { id: identifier };
+      return dbManager.deleteInvoice(filter);
+    },
+    dbManager
+  );
+
+  wrapIpcHandler<[ProductFilters]>(
+    "filter-products",
+    async (dbManager, _event, filters) => {
+      return dbManager.getProductsByFilters(filters);
+    },
+    dbManager
+  );
   // Set initial configs from environment variables if not set
   if (!firebaseConfig.apiKey) {
     ConfigManager.setFirebaseConfig({

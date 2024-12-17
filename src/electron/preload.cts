@@ -70,18 +70,45 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   //     callback(config)
   //   ),
   customer: {
-    filterCustomers:(filters) => {
+    filterCustomers: (filters) => {
       return ipcRenderer.invoke("fetch-customers-by-filters", filters);
     },
     getAllCustomers: () => {
       return ipcRenderer.invoke("get-all-customers");
     },
-    updateCustomer:(customerId, updates) => {
+    createCustomer: (customerData) => {
+      return ipcRenderer.invoke("create-customer", customerData);
+    },
+    updateCustomer: (customerId, updates) => {
       return ipcRenderer.invoke("update-customer", customerId, updates);
     },
     deleteCustomer: (customerId) => {
       return ipcRenderer.invoke("delete-customer", customerId);
     },
-  }
-  
+  },
+  invoice: {
+    createInvoice: (invoiceData, invoiceItems) => {
+      return ipcRenderer.invoke("create-invoice", invoiceData, invoiceItems);
+    },
+    getInvoice: (identifier) => {
+      return ipcRenderer.invoke("get-invoice", identifier);
+    },
+    updateInvoice: (identifier, updatedInvoiceData, updatedItems) => {
+      return ipcRenderer.invoke(
+        "update-invoice",
+        identifier,
+        updatedInvoiceData,
+        updatedItems
+      );
+    },
+    deleteInvoice: (identifier) => {
+      return ipcRenderer.invoke("delete-invoice", identifier);
+    },
+  },
+  product: {
+    filterProducts: (filters) => {
+      return ipcRenderer.invoke("filter-products", filters);
+    },
+   
+  },
 } satisfies Window["electronAPI"]);

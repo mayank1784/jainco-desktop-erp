@@ -513,40 +513,48 @@ export class DatabaseManager {
     }
   }
 
-  getCustomersByFilters(filters: Record<string, string | number>) {
+  getCustomersByFilters(filters: CustomerFilters) {
     if (!this.db) {
       throw new Error("Database is not initialized.");
     }
-    const validFields = [
-      "id",
-      "name",
-      "email",
-      "phone",
-      "credit_balance",
-      "debit_balance",
-    ];
-    const conditions = [];
-    const values = [];
-
+  
+    // Initialize query components
+    const conditions: string[] = [];
+    const values: (string | number | bigint)[] = [];
+  
     for (const [field, value] of Object.entries(filters)) {
-      if (!validFields.includes(field)) {
-        throw new Error(`Invalid field: ${field}`);
-      }
-
-      // Handle string fields with LIKE operator and wildcards
+      if (value === undefined) continue; // Skip undefined filters
+  
+      // Handle string fields with LIKE for partial matching
       if (typeof value === "string") {
         conditions.push(`${field} LIKE ?`);
         values.push(`%${value}%`); // Add wildcards for partial matching
-      } else {
+      } else if (typeof value === "number" || typeof value === "bigint") {
         conditions.push(`${field} = ?`);
         values.push(value);
+      } else {
+        throw new Error(`Invalid value type for field: ${field}`);
       }
     }
-
-    const query = `SELECT * FROM customers WHERE ${conditions.join(" AND ")}`;
-    const results = this.db.prepare(query).all(values);
-    return { success: true, data: results };
+  
+    // Construct the WHERE clause
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  
+    // Build and execute the query
+    const query = `
+      SELECT *
+      FROM customers
+      ${whereClause}
+    `;
+  
+    try {
+      const results = this.db.prepare(query).all(...values);
+      return { success: true, data: results };
+    } catch (error) {
+      throw new Error((error as Error).message);
+    }
   }
+  
 
   getAllCustomers() {
     if (!this.db) {
@@ -555,6 +563,48 @@ export class DatabaseManager {
     const query = `SELECT * FROM customers`;
     const results = this.db.prepare(query).all();
     return { success: true, data: results };
+  }
+
+  createCustomer(customerData: Partial<Customer>) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    try {
+      // Extract provided keys and values dynamically
+      const keys = Object.keys(customerData);
+      const values = Object.values(customerData);
+
+      // Construct dynamic SQL query
+      const placeholders = keys.map(() => "?").join(", ");
+      const insertQuery = `
+      INSERT INTO customers (${keys.join(", ")})
+      VALUES (${placeholders})
+    `;
+
+      // Execute the query to insert customer data
+      const result = this.db.prepare(insertQuery).run(...values);
+
+      // Check if the insert was successful
+      if (result.changes > 0) {
+        const createdCustomer = this.db
+          .prepare("SELECT * FROM customers WHERE id = ?")
+          .get(result.lastInsertRowid);
+        return { success: true, data: createdCustomer };
+      }
+
+      return {
+        success: false,
+        createdCustomer: null,
+        error: "Failed to create customer",
+      };
+    } catch (error) {
+      console.error("Error creating customer:", error);
+      return {
+        success: false,
+        createdCustomer: null,
+        error: (error as Error).message,
+      };
+    }
   }
 
   updateCustomer(
@@ -609,6 +659,438 @@ export class DatabaseManager {
 
     return { success: true, changes: result.changes, data: deletedRows };
   }
+
+  createInvoice(invoiceData: Invoice, invoiceItems: InvoiceItem[]) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    const db = this.db;
+    const { invoice_id, cust_id, ...invoiceFields } = invoiceData;
+
+    try {
+      if (!invoice_id || !cust_id) {
+        throw new Error("Invoice ID and Customer ID are required");
+      }
+
+      // Start a transaction
+      db.exec("BEGIN TRANSACTION");
+
+      // Insert invoice
+      const invoiceKeys = [
+        "invoice_id",
+        "cust_id",
+        ...Object.keys(invoiceFields),
+      ];
+      const invoiceValues = [
+        invoice_id,
+        cust_id,
+        ...Object.values(invoiceFields),
+      ];
+      const invoicePlaceholders = invoiceKeys.map(() => "?").join(", ");
+      const insertInvoiceQuery = `
+        INSERT INTO invoices (${invoiceKeys.join(", ")})
+        VALUES (${invoicePlaceholders})
+      `;
+      const invoiceResult = db
+        .prepare(insertInvoiceQuery)
+        .run(...invoiceValues);
+
+      if (invoiceResult.changes === 0) {
+        throw new Error("Failed to insert invoice");
+      }
+
+      // Insert invoice items
+      const itemsInsertionResult = this.createInvoiceItems(
+        invoiceResult.lastInsertRowid,
+        invoiceItems
+      );
+      if (!itemsInsertionResult.success) {
+        throw new Error(
+          itemsInsertionResult.error || "Failed to insert invoice items"
+        );
+      }
+
+      // Commit transaction
+      db.exec("COMMIT");
+
+      // Fetch the newly created invoice
+      const createdInvoice = db
+        .prepare("SELECT * FROM invoices WHERE id = ?")
+        .get(invoiceResult.lastInsertRowid) as Invoice;
+
+      const finalInvoice = {
+        ...createdInvoice,
+        invoice_items: itemsInsertionResult.invoice_items,
+      };
+
+      return { success: true, createdInvoice: finalInvoice };
+    } catch (error) {
+      // Rollback transaction on error
+      db.exec("ROLLBACK");
+      console.error("Error creating invoice:", error);
+      return {
+        success: false,
+        createdInvoice: null,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  private createInvoiceItems(invoiceId: number | bigint, items: InvoiceItem[]) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    try {
+      this.db.exec("BEGIN TRANSACTION");
+
+      for (const item of items) {
+        const { item_id, sku, ...itemFields } = item;
+        const invoiceItemKeys = [
+          "invoice_id",
+          "item_id",
+          "sku",
+          ...Object.keys(itemFields),
+        ];
+        const invoiceItemValues = [
+          invoiceId,
+          item_id,
+          sku,
+          ...Object.values(itemFields),
+        ];
+        const invoiceItemPlaceholders = invoiceItemKeys
+          .map(() => "?")
+          .join(", ");
+        const insertInvoiceItemQuery = `
+        INSERT INTO invoice_items (${invoiceItemKeys.join(", ")})
+        VALUES (${invoiceItemPlaceholders})
+      `;
+        const result = this.db
+          .prepare(insertInvoiceItemQuery)
+          .run(...invoiceItemValues);
+
+        if (result.changes === 0) {
+          throw new Error(`Failed to insert item: ${item.sku}`);
+        }
+      }
+      this.db.exec("COMMIT");
+      const createdInvoiceItems = this.db
+        .prepare("SELECT * FROM invoice_items WHERE invoice_id = ?")
+        .get(invoiceId);
+
+      return { success: true, invoice_items: createdInvoiceItems };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      console.error("Error inserting invoice items:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  getInvoice(identifier: { id?: number; invoice_id?: string }) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+
+    try {
+      const { id, invoice_id } = identifier;
+
+      // Validate input
+      if (!id && !invoice_id) {
+        throw new Error("Either 'id' or 'invoice_id' must be provided.");
+      }
+
+      // Select the appropriate query based on the provided identifier
+      const invoiceQuery = `
+        SELECT *
+        FROM invoices 
+        WHERE ${id ? "id = ?" : "invoice_id = ?"}
+      `;
+      const invoice = this.db.prepare(invoiceQuery).get(id ?? invoice_id) as
+        | Invoice
+        | undefined;
+
+      if (!invoice) {
+        throw new Error("Invoice not found");
+      }
+
+      // Fetch the associated invoice items
+      const itemsQuery = `
+        SELECT * 
+        FROM invoice_items 
+        WHERE invoice_id = ?
+      `;
+      const invoiceItems = this.db
+        .prepare(itemsQuery)
+        .all(invoice.id) as InvoiceItem[];
+
+      // Combine invoice and its items
+      const result = { ...invoice, invoice_items: invoiceItems };
+
+      return { success: true, invoice: result };
+    } catch (error) {
+      console.error("Error fetching invoice:", error);
+      return { success: false, error: (error as Error).message, invoice: null };
+    }
+  }
+
+  updateInvoice(
+    identifier: { id?: number; invoice_id?: string },
+    updatedInvoiceData: Partial<Omit<Invoice, "id" | "invoice_id">>,
+    updatedItems: InvoiceItem[]
+  ) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+
+    const db = this.db;
+
+    try {
+      const { id, invoice_id } = identifier;
+
+      // Validate input
+      if (!id && !invoice_id) {
+        throw new Error("Either 'id' or 'invoice_id' must be provided.");
+      }
+
+      db.exec("BEGIN TRANSACTION");
+
+      let invoiceId: number | bigint;
+
+      // Update invoice data if any fields are provided
+      if (Object.keys(updatedInvoiceData).length > 0) {
+        const updateInvoiceQuery = `
+          UPDATE invoices
+          SET ${Object.keys(updatedInvoiceData)
+            .map((key) => `${key} = ?`)
+            .join(", ")}
+          WHERE ${id ? "id = ?" : "invoice_id = ?"}
+        `;
+
+        const updateInvoiceValues = [
+          ...Object.values(updatedInvoiceData),
+          id ?? invoice_id,
+        ];
+
+        const invoiceUpdateResult = db
+          .prepare(updateInvoiceQuery)
+          .run(updateInvoiceValues);
+
+        if (invoiceUpdateResult.changes === 0) {
+          throw new Error("Failed to update invoice.");
+        }
+
+        // Fetch the updated invoice_id
+        const fetchQuery = `
+          SELECT id FROM invoices WHERE ${id ? "id = ?" : "invoice_id = ?"}
+        `;
+        const result = db.prepare(fetchQuery).get(id ?? invoice_id) as {
+          id: number | bigint;
+        };
+        invoiceId = result.id;
+      } else {
+        // Fetch existing invoice_id if no updates are done to the invoice fields
+        const fetchQuery = `
+          SELECT id FROM invoices WHERE ${id ? "id = ?" : "invoice_id = ?"}
+        `;
+        const result = db.prepare(fetchQuery).get(id ?? invoice_id) as {
+          id: number;
+        };
+        invoiceId = result.id;
+      }
+
+      // Delegate invoice item updates to the helper function
+      const invoiceItemsResult = this.updateInvoiceItems(
+        invoiceId,
+        updatedItems
+      );
+
+      if (!invoiceItemsResult.success) {
+        throw new Error(invoiceItemsResult.error);
+      }
+
+      db.exec("COMMIT");
+
+      // Fetch updated invoice and items
+      const updatedInvoice = db
+        .prepare("SELECT * FROM invoices WHERE id = ?")
+        .get(invoiceId) as Invoice;
+
+      const updatedInvoiceItems = invoiceItemsResult.updatedItems;
+
+      return {
+        success: true,
+        updatedInvoice: {
+          ...updatedInvoice,
+          invoice_items: updatedInvoiceItems,
+        },
+      };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      console.error("Error updating invoice:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  }
+  private updateInvoiceItems(
+    invoiceId: number | bigint,
+    updatedItems: InvoiceItem[]
+  ) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+
+    try {
+      // Fetch existing items for the given invoice
+      const existingItemsQuery = `
+        SELECT * FROM invoice_items WHERE invoice_id = ?
+      `;
+      const existingItems: InvoiceItem[] = this.db
+        .prepare(existingItemsQuery)
+        .all(invoiceId) as InvoiceItem[];
+
+      const existingItemIds = existingItems.map((item) => item.item_id);
+      const updatedItemIds = updatedItems.map((item) => item.item_id);
+
+      // Determine items to delete, update, and add
+      const itemsToRemove = existingItems.filter(
+        (item) => !updatedItemIds.includes(item.item_id)
+      );
+      const itemsToUpdate = updatedItems.filter((item) =>
+        existingItemIds.includes(item.item_id)
+      );
+      const itemsToAdd = updatedItems.filter(
+        (item) => !existingItemIds.includes(item.item_id)
+      );
+      this.db.exec("BEGIN TRANSACTION");
+      // Delete items no longer present
+      if (itemsToRemove.length > 0) {
+        const deleteItemQuery = `
+          DELETE FROM invoice_items WHERE invoice_id = ? AND item_id = ?
+        `;
+        const deleteStmt = this.db.prepare(deleteItemQuery);
+
+        for (const item of itemsToRemove) {
+          const result = deleteStmt.run(invoiceId, item.item_id);
+          if (result.changes === 0) {
+            throw new Error(`Failed to delete item with ID: ${item.item_id}`);
+          }
+        }
+      }
+
+      // Update existing items
+      if (itemsToUpdate.length > 0) {
+        for (const item of itemsToUpdate) {
+          // Restrict updates to 'price' and 'quantity' only
+          const allowedKeys = ["price", "quantity"];
+          const invoiceItemKeys = Object.keys(item).filter(
+            (key) => allowedKeys.includes(key) && key !== "item_id" // Exclude item_id
+          );
+
+          const invoiceItemValues = invoiceItemKeys.map(
+            (key) => item[key as keyof InvoiceItem]
+          ); // Corresponding values
+
+          // Dynamically construct SET clause
+          const setClause = invoiceItemKeys
+            .map((key) => `${key} = ?`)
+            .join(", ");
+
+          if (setClause.length === 0) {
+            throw new Error(
+              `No allowed fields to update for item with ID: ${item.item_id}`
+            );
+          }
+
+          const updateQuery = `
+            UPDATE invoice_items 
+            SET ${setClause}
+            WHERE invoice_id = ? AND item_id = ?
+          `;
+
+          // Prepare values for the query: dynamic values + conditions
+          const queryValues = [...invoiceItemValues, invoiceId, item.item_id];
+
+          const result = this.db.prepare(updateQuery).run(...queryValues);
+
+          if (result.changes === 0) {
+            throw new Error(`Failed to update item with ID: ${item.item_id}`);
+          }
+        }
+      }
+
+      // Add new items
+      if (itemsToAdd.length > 0) {
+        const res = this.createInvoiceItems(invoiceId, itemsToAdd);
+        if (!res.success) {
+          throw new Error(res.error);
+        }
+      }
+      this.db.exec("COMMIT");
+      const finalUpdatedItems = this.db
+        .prepare("SELECT * FROM invoice_items WHERE invoice_id = ?")
+        .all(invoiceId) as InvoiceItem[];
+      return { success: true, updatedItems: finalUpdatedItems };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      console.error("Error updating invoice items:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  deleteInvoice(identifier: { id?: number; invoice_id?: string }) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+    const { id, invoice_id } = identifier;
+    const deleteQuery = `
+      DELETE FROM invoices WHERE ${id ? "id = ?" : "invoice_id = ?"}
+    `;
+    const result = this.db.prepare(deleteQuery).run(id ?? invoice_id);
+    return { success: result.changes > 0, changes: result.changes };
+  }
+
+  getProductsByFilters(filters: ProductFilters) {
+    if (!this.db) {
+      throw new Error("Database is not initialized.");
+    }
+  
+    const conditions: string[] = [];
+    const parameters: (string | number | bigint | undefined)[] = [];
+  
+    // Add filters to the query dynamically
+    if (filters.id !== undefined) {
+      conditions.push("id = ?");
+      parameters.push(filters.id); // Exact match for numeric ID
+    }
+    if (filters.prod_name) {
+      conditions.push("prod_name LIKE ?");
+      parameters.push(`%${filters.prod_name}%`); // Partial match for product name
+    }
+    if (filters.fs_sku) {
+      conditions.push("fs_sku LIKE ?");
+      parameters.push(`%${filters.fs_sku}%`); // Partial match for SKU
+    }
+    if (filters.category_name) {
+      conditions.push("category_name LIKE ?");
+      parameters.push(`%${filters.category_name}%`); // Partial match for category
+    }
+  
+    // Construct the WHERE clause
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" OR ")}` : "";
+  
+    const query = `
+      SELECT *
+      FROM products
+      ${whereClause}
+    `;
+  
+    try {
+      const result = this.db.prepare(query).all(...parameters);
+      return { success: true, data: result };
+    } catch (error) {
+      throw new Error((error as Error).message);
+    }
+  }
+  
 }
 
 export const dbManager = new DatabaseManager();

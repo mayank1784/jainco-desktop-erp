@@ -44,14 +44,44 @@ declare global {
           filters: Record<string, string | number>
         ) => Promise<{ success: boolean; data: Customer[] }>;
         getAllCustomers: () => Promise<{ success: boolean; data: Customer[] }>;
-        updateCustomer: (customerId: number, updates: Omit<Customer, 'id' | 'fs_cust_id' | 'created_at'>) => Promise<{ success: boolean; changes: number; data: Customer }>;
-        deleteCustomer: (customerId: number) => Promise<{ success: boolean; changes: number; data: Customer }>;
+        createCustomer: (
+          customerData: Partial<Customer>
+        ) => Promise<{ success: boolean; data: Customer }>;
+        updateCustomer: (
+          customerId: number,
+          updates: Omit<Customer, "id" | "fs_cust_id" | "created_at">
+        ) => Promise<{ success: boolean; changes: number; data: Customer }>;
+        deleteCustomer: (
+          customerId: number
+        ) => Promise<{ success: boolean; changes: number; data: Customer }>;
+      };
+      invoice: {
+        createInvoice: (
+          invoiceData: Invoice,
+          invoiceItems: InvoiceItem[]
+        ) => Promise<{ success: boolean; createdInvoice: unknown }>;
+        getInvoice: (
+          identifier: number | string
+        ) => Promise<{ success: boolean; invoice: unknown }>;
+        updateInvoice: (
+          identifier: number | string,
+          updatedInvoiceData: Partial<Omit<Invoice, "id" | "invoice_id">>,
+          updatedItems: InvoiceItem[]
+        ) => Promise<{ success: boolean; updatedInvoice: unknown }>;
+        deleteInvoice: (
+          identifier: number | string
+        ) => Promise<{ success: boolean; changes: number }>;
+      };
+      product: {
+        filterProducts: (
+          filters: Record<string, string | undefined>
+        ) => Promise<{ success: boolean; data: Product[] }>;
       };
     };
   }
   interface Customer {
-    id?: number;
-    fs_cust_id?: number;
+    id?: number | bigint;
+    fs_cust_id?: string;
     name: string;
     email?: string;
     phone?: string;
@@ -61,6 +91,8 @@ declare global {
     country?: string;
     pincode?: string;
     created_at?: string;
+    credit_balance?: number;
+    debit_balance?: number;
   }
   interface FirebaseConfig {
     apiKey: string;
@@ -76,7 +108,7 @@ declare global {
     key: string;
   }
   interface Product {
-    id?: number;
+    id?: number | bigint;
     fs_sku: string;
     fs_prod_id?: string;
     fs_variation_id?: string;
@@ -88,9 +120,9 @@ declare global {
   }
 
   interface Invoice {
-    id: number;
+    id: number | bigint;
     invoice_id: string;
-    cust_id: number;
+    cust_id: number | bigint;
     status: "unpaid" | "paid";
     date?: string;
     total_amount: number;
@@ -103,11 +135,20 @@ declare global {
     place_of_supply?: string;
     created_at: string;
   }
+  interface InvoiceItem {
+    id: number | bigint;
+    invoice_id: string;
+    item_id: number | bigint;
+    sku: string;
+    price: number;
+    quantity: number;
+    amount?: number;
+  }
 
   interface Transaction {
-    id: number;
-    transaction_id: number;
-    invoice_id: number;
+    id: number | bigint;
+    transaction_id: number | bigint;
+    invoice_id: number | bigint;
     payment_method: number | null;
     transaction_date: string;
     amount: number;
@@ -119,13 +160,30 @@ declare global {
   }
 
   interface Order {
-    id: number;
+    id: number | bigint;
     order_id: string;
     customer_id: string;
     status: "pending" | "completed";
     created_at: string;
     updated_at: string;
   }
+
+  interface ProductFilters {
+    id?: number | bigint;
+    prod_name?: string;
+    fs_sku?: string;
+    category_name?: string;
+  }
+
+  type CustomerFilters = {
+    id?: number | bigint;
+    name?: string;
+    email?: string;
+    phone?: string;
+    credit_balance?: number;
+    debit_balance?: number;
+  };
+  
 }
 
 export {};
